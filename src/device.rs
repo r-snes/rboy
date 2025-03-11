@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::cpu::CPU;
 use crate::gbmode::GbMode;
 use crate::keypad::KeypadKey;
@@ -5,6 +7,9 @@ use crate::mbc;
 use crate::printer::GbPrinter;
 use crate::sound;
 use crate::StrResult;
+
+pub const REFRESH_RATE: u64 = 60;
+pub const FRAME_DURATION: Duration = core::time::Duration::from_nanos(1_000_000_000 / REFRESH_RATE);
 
 pub struct Device {
     cpu: CPU<'static>,

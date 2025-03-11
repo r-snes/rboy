@@ -2,7 +2,8 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample};
-use rboy::device::Device;
+use rboy::device::{Device, FRAME_DURATION};
+use rboy::CPU_FREQUENCY;
 use std::io::{self, Read};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -354,10 +355,10 @@ fn construct_cpu(
 }
 
 fn run_cpu(mut cpu: Box<Device>, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEvent>) {
-    let periodic = timer_periodic(16);
+    let periodic = timer_periodic(FRAME_DURATION);
     let mut limit_speed = true;
 
-    let waitticks = (4194304f64 / 1000.0 * 16.0).round() as u32;
+    let waitticks = ((CPU_FREQUENCY / 1000.0) * FRAME_DURATION.as_millis() as f64).round() as u32;
     let mut ticks = 0;
 
     'outer: loop {
@@ -395,10 +396,10 @@ fn run_cpu(mut cpu: Box<Device>, sender: SyncSender<Vec<u8>>, receiver: Receiver
     }
 }
 
-fn timer_periodic(ms: u64) -> Receiver<()> {
+fn timer_periodic(d: std::time::Duration) -> Receiver<()> {
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_millis(ms));
+        std::thread::sleep(d);
         if tx.send(()).is_err() {
             break;
         }

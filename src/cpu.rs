@@ -5,6 +5,9 @@ use crate::register::Registers;
 use crate::serial::SerialCallback;
 use crate::StrResult;
 
+/// The LR35902 frequency in MHz
+pub const CPU_FREQUENCY: f64 = 4_194_304.0;
+
 pub struct CPU<'a> {
     reg: Registers,
     pub mmu: MMU<'a>,
