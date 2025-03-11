@@ -155,10 +155,9 @@ fn real_main() -> i32 {
         opt_skip_checksum,
     );
 
-    if cpu.is_none() {
+    let Some(mut cpu) = cpu else {
         return EXITCODE_CPULOADFAILS;
-    }
-    let mut cpu = cpu.unwrap();
+    };
 
     let mut cpal_audio_stream = None;
     if opt_audio {
