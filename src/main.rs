@@ -25,7 +25,8 @@ enum GBEvent {
     KeyDown(rboy::KeypadKey),
     SpeedUp,
     SpeedDown,
-    PlayPause,
+    Pause,
+    Resume,
 }
 
 #[cfg(target_os = "windows")]
@@ -202,6 +203,7 @@ fn real_main() -> i32 {
     let cputhread = thread::spawn(move || run_cpu(cpu, sender2, receiver1));
 
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+    let mut paused = false;
     'evloop: loop {
         println!("Event loop");
         let timeout = Some(std::time::Duration::ZERO);
@@ -222,10 +224,13 @@ fn real_main() -> i32 {
                         (Pressed, Key::Character("1")) => set_window_size(&window, 1),
                         (Pressed, Key::Character("r" | "R")) => set_window_size(&window, scale),
                         (Pressed, Key::Character("p" | "P")) => {
-                            println!("Sending pause event");
-                            let _ = sender1.send(GBEvent::PlayPause);
-                            println!("Sent");
-                        },
+                            let _ = sender1.send(if paused {
+                                GBEvent::Resume
+                            } else {
+                                GBEvent::Pause
+                            });
+                            paused = !paused;
+                        }
                         (Pressed, Key::Named(NamedKey::Shift)) => {
                             let _ = sender1.send(GBEvent::SpeedUp);
                         }
@@ -256,13 +261,23 @@ fn real_main() -> i32 {
         if let PumpStatus::Exit(_) = status {
             break 'evloop;
         }
-        match receiver2.try_recv() {
-            Ok(data) => recalculate_screen(&display, &mut texture, &*data, &renderoptions),
-            Err(TryRecvError::Empty) => (),
-            Err(..) => break 'evloop, // Remote end has hung-up
-        }
+
+        let new_frame = if paused {
+            match receiver2.try_recv() {
+                Ok(data) => data,
+                Err(TryRecvError::Empty) => continue,
+                Err(..) => break 'evloop, // Remote end has hung-up
+            }
+        } else {
+            match receiver2.recv() {
+                Ok(data) => data,
+                Err(..) => break 'evloop, // Remote end has hung-up
+            }
+        };
+        recalculate_screen(&display, &mut texture, &*new_frame, &renderoptions);
     }
-    println!("Closing main thread");
+
+    let _ = sender1.send(GBEvent::Resume);
 
     drop(cpal_audio_stream);
     drop(receiver2); // Stop CPU thread by disconnecting
@@ -366,14 +381,13 @@ fn construct_cpu(
     Some(Box::new(c))
 }
 
-fn pause_cpu(receiver: &Receiver<GBEvent>)
-{
+fn pause_cpu(receiver: &Receiver<GBEvent>) {
     println!("Pausing CPU");
     'a: loop {
         let res = receiver.recv();
         println!("Received event during pause: {:#?}", &res);
         match res {
-            Ok(GBEvent::PlayPause) => break 'a,
+            Ok(GBEvent::Resume) => break 'a,
             Ok(_) => continue,
             Err(_) => break 'a,
         }
@@ -411,7 +425,8 @@ fn run_cpu(mut cpu: Box<Device>, sender: SyncSender<Vec<u8>>, receiver: Receiver
                         limit_speed = true;
                         cpu.sync_audio();
                     }
-                    GBEvent::PlayPause => pause_cpu(&receiver),
+                    GBEvent::Pause => pause_cpu(&receiver),
+                    GBEvent::Resume => (),
                 },
                 Err(TryRecvError::Empty) => break 'recv,
                 Err(TryRecvError::Disconnected) => break 'outer,
