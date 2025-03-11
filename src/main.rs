@@ -4,10 +4,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample};
 use rboy::device::{Device, FRAME_DURATION};
 use rboy::CPU_FREQUENCY;
+use std::fmt::Debug;
 use std::io::{self, Read};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::{thread, time};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 
 const EXITCODE_SUCCESS: i32 = 0;
@@ -18,11 +19,13 @@ struct RenderOptions {
     pub linear_interpolation: bool,
 }
 
+#[derive(Debug)]
 enum GBEvent {
     KeyUp(rboy::KeypadKey),
     KeyDown(rboy::KeypadKey),
     SpeedUp,
     SpeedDown,
+    PlayPause,
 }
 
 #[cfg(target_os = "windows")]
@@ -200,11 +203,14 @@ fn real_main() -> i32 {
 
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
     'evloop: loop {
+        println!("Event loop");
         let timeout = Some(std::time::Duration::ZERO);
         let status = event_loop.pump_events(timeout, |ev, elwt| {
             use winit::event::ElementState::{Pressed, Released};
             use winit::event::{Event, WindowEvent};
             use winit::keyboard::{Key, NamedKey};
+
+            println!("Got event: {:#?}", ev);
 
             match ev {
                 Event::WindowEvent { event, .. } => match event {
@@ -215,6 +221,11 @@ fn real_main() -> i32 {
                         (Pressed, Key::Named(NamedKey::Escape)) => elwt.exit(),
                         (Pressed, Key::Character("1")) => set_window_size(&window, 1),
                         (Pressed, Key::Character("r" | "R")) => set_window_size(&window, scale),
+                        (Pressed, Key::Character("p" | "P")) => {
+                            println!("Sending pause event");
+                            let _ = sender1.send(GBEvent::PlayPause);
+                            println!("Sent");
+                        },
                         (Pressed, Key::Named(NamedKey::Shift)) => {
                             let _ = sender1.send(GBEvent::SpeedUp);
                         }
@@ -245,11 +256,13 @@ fn real_main() -> i32 {
         if let PumpStatus::Exit(_) = status {
             break 'evloop;
         }
-        match receiver2.recv() {
+        match receiver2.try_recv() {
             Ok(data) => recalculate_screen(&display, &mut texture, &*data, &renderoptions),
+            Err(TryRecvError::Empty) => (),
             Err(..) => break 'evloop, // Remote end has hung-up
         }
     }
+    println!("Closing main thread");
 
     drop(cpal_audio_stream);
     drop(receiver2); // Stop CPU thread by disconnecting
@@ -353,12 +366,27 @@ fn construct_cpu(
     Some(Box::new(c))
 }
 
+fn pause_cpu(receiver: &Receiver<GBEvent>)
+{
+    println!("Pausing CPU");
+    'a: loop {
+        let res = receiver.recv();
+        println!("Received event during pause: {:#?}", &res);
+        match res {
+            Ok(GBEvent::PlayPause) => break 'a,
+            Ok(_) => continue,
+            Err(_) => break 'a,
+        }
+    }
+}
+
 fn run_cpu(mut cpu: Box<Device>, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEvent>) {
     let periodic = timer_periodic(FRAME_DURATION);
     let mut limit_speed = true;
 
     let waitticks = ((CPU_FREQUENCY / 1000.0) * FRAME_DURATION.as_millis() as f64).round() as u32;
     let mut ticks = 0;
+    let mut prev_time = time::Instant::now();
 
     'outer: loop {
         while ticks < waitticks {
@@ -383,6 +411,7 @@ fn run_cpu(mut cpu: Box<Device>, sender: SyncSender<Vec<u8>>, receiver: Receiver
                         limit_speed = true;
                         cpu.sync_audio();
                     }
+                    GBEvent::PlayPause => pause_cpu(&receiver),
                 },
                 Err(TryRecvError::Empty) => break 'recv,
                 Err(TryRecvError::Disconnected) => break 'outer,
@@ -390,13 +419,16 @@ fn run_cpu(mut cpu: Box<Device>, sender: SyncSender<Vec<u8>>, receiver: Receiver
         }
 
         if limit_speed {
+            let new_time = time::Instant::now();
+            println!("Frame duration: {}ms", (new_time - prev_time).as_millis());
+            prev_time = new_time;
             let _ = periodic.recv();
         }
     }
 }
 
 fn timer_periodic(d: std::time::Duration) -> Receiver<()> {
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let (tx, rx) = std::sync::mpsc::sync_channel(0);
     std::thread::spawn(move || loop {
         std::thread::sleep(d);
         if tx.send(()).is_err() {
