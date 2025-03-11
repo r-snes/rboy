@@ -16,6 +16,9 @@
       in with pkgs; rec {
         devShell = mkShell rec {
           buildInputs = [
+            pkg-config
+            alsa-lib
+
             libxkbcommon
             libGL
 
