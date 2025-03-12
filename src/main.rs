@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::io::{self, Read};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
-use std::{thread, time};
+use std::thread;
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 
 const EXITCODE_SUCCESS: i32 = 0;
@@ -205,14 +205,11 @@ fn real_main() -> i32 {
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
     let mut paused = false;
     'evloop: loop {
-        println!("Event loop");
         let timeout = Some(std::time::Duration::ZERO);
         let status = event_loop.pump_events(timeout, |ev, elwt| {
             use winit::event::ElementState::{Pressed, Released};
             use winit::event::{Event, WindowEvent};
             use winit::keyboard::{Key, NamedKey};
-
-            println!("Got event: {:#?}", ev);
 
             match ev {
                 Event::WindowEvent { event, .. } => match event {
@@ -382,10 +379,8 @@ fn construct_cpu(
 }
 
 fn pause_cpu(receiver: &Receiver<GBEvent>) {
-    println!("Pausing CPU");
     'a: loop {
         let res = receiver.recv();
-        println!("Received event during pause: {:#?}", &res);
         match res {
             Ok(GBEvent::Resume) => break 'a,
             Ok(_) => continue,
@@ -400,7 +395,6 @@ fn run_cpu(mut cpu: Box<Device>, sender: SyncSender<Vec<u8>>, receiver: Receiver
 
     let waitticks = ((CPU_FREQUENCY / 1000.0) * FRAME_DURATION.as_millis() as f64).round() as u32;
     let mut ticks = 0;
-    let mut prev_time = time::Instant::now();
 
     'outer: loop {
         while ticks < waitticks {
@@ -434,9 +428,6 @@ fn run_cpu(mut cpu: Box<Device>, sender: SyncSender<Vec<u8>>, receiver: Receiver
         }
 
         if limit_speed {
-            let new_time = time::Instant::now();
-            println!("Frame duration: {}ms", (new_time - prev_time).as_millis());
-            prev_time = new_time;
             let _ = periodic.recv();
         }
     }
