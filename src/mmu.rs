@@ -196,7 +196,7 @@ impl<'a> MMU<'a> {
         return gputicks;
     }
 
-    pub fn rb(&mut self, address: u16) -> u8 {
+    pub fn rb(&self, address: u16) -> u8 {
         match address {
             0x0000..=0x7FFF => self.mbc.readrom(address),
             0x8000..=0x9FFF => self.gpu.rb(address),
@@ -210,7 +210,7 @@ impl<'a> MMU<'a> {
             0xFF01..=0xFF02 => self.serial.rb(address),
             0xFF04..=0xFF07 => self.timer.rb(address),
             0xFF0F => self.intf | 0b11100000,
-            0xFF10..=0xFF3F => self.sound.as_mut().map_or(0xFF, |s| s.rb(address)),
+            0xFF10..=0xFF3F => self.sound.as_ref().map_or(0xFF, |s| s.rb(address)),
             0xFF4D | 0xFF4F | 0xFF51..=0xFF55 | 0xFF6C | 0xFF70 if self.gbmode != GbMode::Color => {
                 0xFF
             }

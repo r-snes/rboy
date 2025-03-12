@@ -715,8 +715,8 @@ impl Sound {
         }
     }
 
-    pub fn rb(&mut self, a: u16) -> u8 {
-        self.run();
+    pub fn rb(&self, a: u16) -> u8 {
+        // self.run();
         let v = match a {
             0xFF10..=0xFF14 => self.channel1.rb(a),
             0xFF16..=0xFF19 => self.channel2.rb(a),
