@@ -419,7 +419,10 @@ fn run_cpu(mut cpu: Box<Device>, sender: SyncSender<Vec<u8>>, receiver: Receiver
                         limit_speed = true;
                         cpu.sync_audio();
                     }
-                    GBEvent::Pause => pause_cpu(&receiver),
+                    GBEvent::Pause => {
+                        println!("Pokemon in party slot 1: {}", cpu.cpu.mmu.rb(0xda23));
+                        pause_cpu(&receiver);
+                    },
                     GBEvent::Resume => (),
                 },
                 Err(TryRecvError::Empty) => break 'recv,

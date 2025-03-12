@@ -12,7 +12,7 @@ pub const REFRESH_RATE: u64 = 60;
 pub const FRAME_DURATION: Duration = core::time::Duration::from_nanos(1_000_000_000 / REFRESH_RATE);
 
 pub struct Device {
-    cpu: CPU<'static>,
+    pub cpu: CPU<'static>,
 }
 
 fn stdoutprinter(v: u8) -> Option<u8> {
