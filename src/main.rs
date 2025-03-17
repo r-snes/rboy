@@ -356,7 +356,7 @@ fn construct_cpu(
     output_serial: bool,
     output_printer: bool,
     skip_checksum: bool,
-) -> Option<Box<Device>> {
+) -> Option<Device> {
     let opt_c = match classic_mode {
         true => Device::new(filename, skip_checksum),
         false => Device::new_cgb(filename, skip_checksum),
@@ -375,7 +375,7 @@ fn construct_cpu(
         c.set_stdout(output_serial);
     }
 
-    Some(Box::new(c))
+    Some(c)
 }
 
 fn pause_cpu(receiver: &Receiver<GBEvent>) {
@@ -389,7 +389,7 @@ fn pause_cpu(receiver: &Receiver<GBEvent>) {
     }
 }
 
-fn run_cpu(mut cpu: Box<Device>, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEvent>) {
+fn run_cpu(mut cpu: Device, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEvent>) {
     let periodic = timer_periodic(FRAME_DURATION);
     let mut limit_speed = true;
 
