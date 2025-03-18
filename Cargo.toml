@@ -9,6 +9,7 @@ blip_buf = ">=0.1.3"
 clap = { version = "4", optional = true }
 cpal = { version = "0.15", optional = true }
 glium = { version = "0.34", optional = true }
+piccolo = "0.3.3"
 winit = { version = "0.29", optional = true }
 
 [features]

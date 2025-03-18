@@ -2,10 +2,15 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample};
+use piccolo::{Callback, Closure, Executor, Lua};
+use piccolo::{CallbackReturn, Value};
 use rboy::device::{Device, FRAME_DURATION};
 use rboy::CPU_FREQUENCY;
+use std::cell::RefCell;
 use std::fmt::Debug;
-use std::io::{self, Read};
+use std::fs::File;
+use std::io::{self, BufReader, Read};
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -27,6 +32,8 @@ enum GBEvent {
     SpeedDown,
     Pause,
     Resume,
+    LoadPlugin,
+    RunPlugin,
 }
 
 #[cfg(target_os = "windows")]
@@ -219,7 +226,7 @@ fn real_main() -> i32 {
                     } => match (keyevent.state, keyevent.logical_key.as_ref()) {
                         (Pressed, Key::Named(NamedKey::Escape)) => elwt.exit(),
                         (Pressed, Key::Character("1")) => set_window_size(&window, 1),
-                        (Pressed, Key::Character("r" | "R")) => set_window_size(&window, scale),
+                        // (Pressed, Key::Character("r" | "R")) => set_window_size(&window, scale),
                         (Pressed, Key::Character("p" | "P")) => {
                             let _ = sender1.send(if paused {
                                 GBEvent::Resume
@@ -227,6 +234,12 @@ fn real_main() -> i32 {
                                 GBEvent::Pause
                             });
                             paused = !paused;
+                        }
+                        (Pressed, Key::Character("l" | "L")) => {
+                            let _ = sender1.send(GBEvent::LoadPlugin);
+                        }
+                        (Pressed, Key::Character("r" | "R")) => {
+                            let _ = sender1.send(GBEvent::RunPlugin);
                         }
                         (Pressed, Key::Named(NamedKey::Shift)) => {
                             let _ = sender1.send(GBEvent::SpeedUp);
@@ -378,6 +391,47 @@ fn construct_cpu(
     Some(c)
 }
 
+fn load_ram_callbacks(lua: &mut Lua, cpu: &Rc<RefCell<Device>>) {
+    let rb_clone = cpu.clone();
+    let wb_clone = cpu.clone();
+
+    lua.enter(|ctx| {
+        let _ = ctx.set_global(
+            "readbyte",
+            Callback::from_fn(&ctx, move |_, _, mut stack| {
+                let Value::Integer(address) = stack.pop_front() else {
+                    stack.push_front(Value::Nil);
+                    return Ok(CallbackReturn::Return);
+                };
+
+                let byte = rb_clone.borrow().cpu.mmu.rb(address as u16);
+                stack.push_front(Value::Integer(byte as i64));
+                Ok(piccolo::CallbackReturn::Return)
+            }),
+        );
+    });
+
+    lua.enter(|ctx| {
+        let _ = ctx.set_global(
+            "writebyte",
+            Callback::from_fn(&ctx, move |_, _, mut stack| {
+                let Value::Integer(address) = stack.pop_front() else {
+                    stack.push_front(Value::Nil);
+                    return Ok(CallbackReturn::Return);
+                };
+
+                let Value::Integer(byte) = stack.pop_front() else {
+                    stack.push_front(Value::Nil);
+                    return Ok(CallbackReturn::Return);
+                };
+
+                wb_clone.borrow_mut().cpu.mmu.wb(address as u16, byte as u8);
+                Ok(piccolo::CallbackReturn::Return)
+            }),
+        );
+    });
+}
+
 fn pause_cpu(receiver: &Receiver<GBEvent>) {
     'a: loop {
         let res = receiver.recv();
@@ -389,18 +443,24 @@ fn pause_cpu(receiver: &Receiver<GBEvent>) {
     }
 }
 
-fn run_cpu(mut cpu: Device, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEvent>) {
+fn run_cpu(cpu: Device, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEvent>) {
     let periodic = timer_periodic(FRAME_DURATION);
     let mut limit_speed = true;
+    let cpu = Rc::new(RefCell::new(cpu));
+
+    let mut lua = Lua::full();
+    load_ram_callbacks(&mut lua, &cpu);
+
+    let mut plugin_file: Option<BufReader<File>> = None;
 
     let waitticks = ((CPU_FREQUENCY / 1000.0) * FRAME_DURATION.as_millis() as f64).round() as u32;
     let mut ticks = 0;
 
     'outer: loop {
         while ticks < waitticks {
-            ticks += cpu.do_cycle();
-            if cpu.check_and_reset_gpu_updated() {
-                let data = cpu.get_gpu_data().to_vec();
+            ticks += cpu.borrow_mut().do_cycle();
+            if cpu.borrow_mut().check_and_reset_gpu_updated() {
+                let data = cpu.borrow().get_gpu_data().to_vec();
                 if let Err(TrySendError::Disconnected(..)) = sender.try_send(data) {
                     break 'outer;
                 }
@@ -412,18 +472,35 @@ fn run_cpu(mut cpu: Device, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEv
         'recv: loop {
             match receiver.try_recv() {
                 Ok(event) => match event {
-                    GBEvent::KeyUp(key) => cpu.keyup(key),
-                    GBEvent::KeyDown(key) => cpu.keydown(key),
+                    GBEvent::KeyUp(key) => cpu.borrow_mut().keyup(key),
+                    GBEvent::KeyDown(key) => cpu.borrow_mut().keydown(key),
                     GBEvent::SpeedUp => limit_speed = false,
                     GBEvent::SpeedDown => {
                         limit_speed = true;
-                        cpu.sync_audio();
+                        cpu.borrow_mut().sync_audio();
                     }
                     GBEvent::Pause => {
-                        println!("Pokemon in party slot 1: {}", cpu.cpu.mmu.rb(0xda23));
                         pause_cpu(&receiver);
-                    },
+                    }
                     GBEvent::Resume => (),
+                    GBEvent::LoadPlugin => {
+                        plugin_file =
+                            match piccolo::io::buffered_read(File::open("plugin.lua").unwrap()) {
+                                Ok(f) => Some(f),
+                                Err(_) => None,
+                            }
+                    }
+                    GBEvent::RunPlugin => {
+                        let Some(plugin) = &mut plugin_file else {
+                            break;
+                        };
+                        let exec = lua.enter(|ctx| {
+                            let closure = Closure::load(ctx, Some("plugin.lua"), plugin).unwrap();
+                            ctx.stash(Executor::start(ctx, closure.into(), ()))
+                        });
+
+                        let _ = lua.execute::<()>(&exec);
+                    }
                 },
                 Err(TryRecvError::Empty) => break 'recv,
                 Err(TryRecvError::Disconnected) => break 'outer,
