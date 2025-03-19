@@ -7,7 +7,6 @@ use piccolo::{CallbackReturn, Value};
 use rboy::device::{Device, FRAME_DURATION};
 use rboy::CPU_FREQUENCY;
 use std::cell::RefCell;
-use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Read};
 use std::rc::Rc;
@@ -24,23 +23,83 @@ struct RenderOptions {
     pub linear_interpolation: bool,
 }
 
+#[derive(Debug)]
+struct PluginPermissions {
+    pub readbyte: bool,
+    pub writebyte: bool,
+}
+
+impl Default for PluginPermissions {
+    fn default() -> Self {
+        Self {
+            readbyte: false,
+            writebyte: false,
+        }
+    }
+}
+
+impl<'gc> FromValue<'gc> for PluginPermissions {
+    fn from_value(_: piccolo::Context<'gc>, value: Value<'gc>) -> Result<Self, piccolo::TypeError> {
+        let mut ret = PluginPermissions::default();
+
+        if let Value::Nil = value {
+            return Ok(ret);
+        }
+        let Value::Table(tab) = value else {
+            return Err(piccolo::TypeError {
+                expected: "permissions table",
+                found: value.type_name(),
+            });
+        };
+        let iter = tab.iter();
+        for (_, v) in iter {
+            let Value::String(s) = v else {
+                continue;
+            };
+            if s.as_bytes() == b"readbyte" {
+                ret.readbyte = true;
+            }
+            if s.as_bytes() == b"writebyte" {
+                ret.writebyte = true;
+            }
+        }
+        Ok(ret)
+    }
+}
+
 struct PluginTable {
     pub plugin_fn: StashedFunction,
+    pub permissions: PluginPermissions,
 }
 
 impl<'gc> FromValue<'gc> for PluginTable {
-    fn from_value(ctx: piccolo::Context<'gc>, value: Value<'gc>) -> Result<Self, piccolo::TypeError> {
+    fn from_value(
+        ctx: piccolo::Context<'gc>,
+        value: Value<'gc>,
+    ) -> Result<Self, piccolo::TypeError> {
         match value {
-            Value::Function(f) => Ok(PluginTable {plugin_fn: ctx.stash(f)}),
+            Value::Function(f) => Ok(PluginTable {
+                plugin_fn: ctx.stash(f),
+                permissions: PluginPermissions::default(),
+            }),
             Value::Table(t) => {
                 let func = t.get(ctx, "run_plugin");
+                let perms = t.get(ctx, "permissions");
                 match func {
-                    Value::Function(f) => Ok(PluginTable {plugin_fn: ctx.stash(f)}),
-                    x => Err(piccolo::TypeError { expected: "`run_plugin' function in plugin table", found: x.type_name() }),
-
+                    Value::Function(f) => Ok(PluginTable {
+                        plugin_fn: ctx.stash(f),
+                        permissions: PluginPermissions::from_value(ctx, perms)?,
+                    }),
+                    x => Err(piccolo::TypeError {
+                        expected: "`run_plugin' function in plugin table",
+                        found: x.type_name(),
+                    }),
                 }
             }
-            x => Err(piccolo::TypeError { expected: "plugin table", found: x.type_name() }),
+            x => Err(piccolo::TypeError {
+                expected: "plugin table",
+                found: x.type_name(),
+            }),
         }
     }
 }
@@ -412,45 +471,51 @@ fn construct_cpu(
     Some(c)
 }
 
-fn load_ram_callbacks(lua: &mut Lua, cpu: &Rc<RefCell<Device>>) {
-    let rb_clone = cpu.clone();
-    let wb_clone = cpu.clone();
+fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<Device>>) {
+    if perms.readbyte {
+        let rb_clone = cpu.clone();
 
-    lua.enter(|ctx| {
-        let _ = ctx.set_global(
-            "readbyte",
-            Callback::from_fn(&ctx, move |_, _, mut stack| {
-                let Value::Integer(address) = stack.pop_front() else {
-                    stack.push_front(Value::Nil);
-                    return Ok(CallbackReturn::Return);
-                };
+        lua.enter(|ctx| {
+            let _ = ctx.set_global(
+                "readbyte",
+                Callback::from_fn(&ctx, move |_, _, mut stack| {
+                    let Value::Integer(address) = stack.pop_front() else {
+                        stack.push_front(Value::Nil);
+                        return Ok(CallbackReturn::Return);
+                    };
 
-                let byte = rb_clone.borrow().cpu.mmu.rb(address as u16);
-                stack.push_front(Value::Integer(byte as i64));
-                Ok(piccolo::CallbackReturn::Return)
-            }),
-        );
-    });
+                    let byte = rb_clone.borrow().cpu.mmu.rb(address as u16);
+                    stack.push_front(Value::Integer(byte as i64));
+                    Ok(piccolo::CallbackReturn::Return)
+                }),
+            );
+        });
+    }
 
-    lua.enter(|ctx| {
-        let _ = ctx.set_global(
-            "writebyte",
-            Callback::from_fn(&ctx, move |_, _, mut stack| {
-                let Value::Integer(address) = stack.pop_front() else {
-                    stack.push_front(Value::Nil);
-                    return Ok(CallbackReturn::Return);
-                };
+    if perms.writebyte {
+        let wb_clone = cpu.clone();
 
-                let Value::Integer(byte) = stack.pop_front() else {
-                    stack.push_front(Value::Nil);
-                    return Ok(CallbackReturn::Return);
-                };
+        lua.enter(|ctx| {
+            let _ = ctx.set_global(
+                "writebyte",
+                Callback::from_fn(&ctx, move |_, _, mut stack| {
+                    let Value::Integer(address) = stack.pop_front() else {
+                        stack.push_front(Value::Nil);
+                        return Ok(CallbackReturn::Return);
+                    };
 
-                wb_clone.borrow_mut().cpu.mmu.wb(address as u16, byte as u8);
-                Ok(piccolo::CallbackReturn::Return)
-            }),
-        );
-    });
+                    let Value::Integer(byte) = stack.pop_front() else {
+                        stack.push_front(Value::Nil);
+                        return Ok(CallbackReturn::Return);
+                    };
+
+                    wb_clone.borrow_mut().cpu.mmu.wb(address as u16, byte as u8);
+                    Ok(piccolo::CallbackReturn::Return)
+                }),
+            );
+        });
+    }
+
 }
 
 fn pause_cpu(receiver: &Receiver<GBEvent>) {
@@ -470,7 +535,6 @@ fn run_cpu(cpu: Device, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEvent>
     let cpu = Rc::new(RefCell::new(cpu));
 
     let mut lua = Lua::full();
-    load_ram_callbacks(&mut lua, &cpu);
 
     let mut plugin_table: Option<PluginTable> = None;
 
@@ -505,18 +569,21 @@ fn run_cpu(cpu: Device, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEvent>
                     }
                     GBEvent::Resume => (),
                     GBEvent::LoadPlugin => {
-                        let readfile = piccolo::io::buffered_read(File::open("plugin.lua").unwrap()).unwrap();
+                        let readfile =
+                            piccolo::io::buffered_read(File::open("plugin.lua").unwrap()).unwrap();
                         let executor = lua.enter(|ctx| {
                             let closure = Closure::load(ctx, Some("plugin.lua"), readfile).unwrap();
                             ctx.stash(Executor::start(ctx, closure.into(), ()))
                         });
-                        plugin_table = Some(lua.execute(&executor).unwrap());
+                        let tab = lua.execute::<PluginTable>(&executor).unwrap();
+                        load_permissions(&mut lua, &tab.permissions, &cpu);
+                        plugin_table = Some(tab);
                         println!("Loaded plugin");
                     }
                     GBEvent::RunPlugin => {
                         let Some(ptab) = &plugin_table else {
                             println!("No plugin loaded");
-                            continue
+                            continue;
                         };
 
                         let executor = lua.enter(|ctx| {
