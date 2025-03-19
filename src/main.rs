@@ -51,16 +51,15 @@ impl<'gc> FromValue<'gc> for PluginPermissions {
                 found: value.type_name(),
             });
         };
-        let iter = tab.iter();
-        for (_, v) in iter {
-            let Value::String(s) = v else {
+        for (key, val) in tab {
+            let (Value::Integer(_), Value::String(s)) = (key, val) else {
+                eprintln!("Warn: skipping KV pair in plugin permissions: ([{key}] = {val}");
                 continue;
             };
-            if s.as_bytes() == b"readbyte" {
-                ret.readbyte = true;
-            }
-            if s.as_bytes() == b"writebyte" {
-                ret.writebyte = true;
+            match s.as_bytes() {
+                b"readbyte" => ret.readbyte = true,
+                b"writebyte" => ret.writebyte = true,
+                _ => eprintln!("Warn: skipping unknown perm request: {s}"),
             }
         }
         Ok(ret)
@@ -515,7 +514,6 @@ fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<D
             );
         });
     }
-
 }
 
 fn pause_cpu(receiver: &Receiver<GBEvent>) {
@@ -590,7 +588,10 @@ fn run_cpu(cpu: Device, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEvent>
                             let f = ctx.fetch(&ptab.plugin_fn);
                             ctx.stash(Executor::start(ctx, f, ()))
                         });
-                        lua.execute::<()>(&executor).unwrap();
+                        match lua.execute::<()>(&executor) {
+                            Ok(()) => {}
+                            Err(e) => eprintln!("Error during plugin execution: {e}"),
+                        };
                     }
                 },
                 Err(TryRecvError::Empty) => break 'recv,
