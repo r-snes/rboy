@@ -23,19 +23,13 @@ struct RenderOptions {
     pub linear_interpolation: bool,
 }
 
-#[derive(Debug)]
+/// Holds permission requests from a plugin
+///
+/// The [`Default`] implementation requests no permission
+#[derive(Debug, Default)]
 struct PluginPermissions {
     pub readbyte: bool,
     pub writebyte: bool,
-}
-
-impl Default for PluginPermissions {
-    fn default() -> Self {
-        Self {
-            readbyte: false,
-            writebyte: false,
-        }
-    }
 }
 
 impl<'gc> FromValue<'gc> for PluginPermissions {
@@ -53,7 +47,7 @@ impl<'gc> FromValue<'gc> for PluginPermissions {
         };
         for (key, val) in tab {
             let (Value::Integer(_), Value::String(s)) = (key, val) else {
-                eprintln!("Warn: skipping KV pair in plugin permissions: ([{key}] = {val}");
+                eprintln!("Warn: skipping KV pair in plugin permissions: ([{key}] = {val})");
                 continue;
             };
             match s.as_bytes() {
