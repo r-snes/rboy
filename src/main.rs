@@ -2,14 +2,14 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample};
-use piccolo::{Callback, Closure, Executor, Lua};
+use piccolo::{Callback, Closure, Executor, FromValue, Lua, StashedFunction};
 use piccolo::{CallbackReturn, Value};
 use rboy::device::{Device, FRAME_DURATION};
 use rboy::CPU_FREQUENCY;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::fs::File;
-use std::io::{self, BufReader, Read};
+use std::io::{self, Read};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -22,6 +22,27 @@ const EXITCODE_CPULOADFAILS: i32 = 2;
 #[derive(Default)]
 struct RenderOptions {
     pub linear_interpolation: bool,
+}
+
+struct PluginTable {
+    pub plugin_fn: StashedFunction,
+}
+
+impl<'gc> FromValue<'gc> for PluginTable {
+    fn from_value(ctx: piccolo::Context<'gc>, value: Value<'gc>) -> Result<Self, piccolo::TypeError> {
+        match value {
+            Value::Function(f) => Ok(PluginTable {plugin_fn: ctx.stash(f)}),
+            Value::Table(t) => {
+                let func = t.get(ctx, "run_plugin");
+                match func {
+                    Value::Function(f) => Ok(PluginTable {plugin_fn: ctx.stash(f)}),
+                    x => Err(piccolo::TypeError { expected: "`run_plugin' function in plugin table", found: x.type_name() }),
+
+                }
+            }
+            x => Err(piccolo::TypeError { expected: "plugin table", found: x.type_name() }),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -451,7 +472,7 @@ fn run_cpu(cpu: Device, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEvent>
     let mut lua = Lua::full();
     load_ram_callbacks(&mut lua, &cpu);
 
-    let mut plugin_file: Option<BufReader<File>> = None;
+    let mut plugin_table: Option<PluginTable> = None;
 
     let waitticks = ((CPU_FREQUENCY / 1000.0) * FRAME_DURATION.as_millis() as f64).round() as u32;
     let mut ticks = 0;
@@ -484,22 +505,25 @@ fn run_cpu(cpu: Device, sender: SyncSender<Vec<u8>>, receiver: Receiver<GBEvent>
                     }
                     GBEvent::Resume => (),
                     GBEvent::LoadPlugin => {
-                        plugin_file =
-                            match piccolo::io::buffered_read(File::open("plugin.lua").unwrap()) {
-                                Ok(f) => Some(f),
-                                Err(_) => None,
-                            }
-                    }
-                    GBEvent::RunPlugin => {
-                        let Some(plugin) = &mut plugin_file else {
-                            break;
-                        };
-                        let exec = lua.enter(|ctx| {
-                            let closure = Closure::load(ctx, Some("plugin.lua"), plugin).unwrap();
+                        let readfile = piccolo::io::buffered_read(File::open("plugin.lua").unwrap()).unwrap();
+                        let executor = lua.enter(|ctx| {
+                            let closure = Closure::load(ctx, Some("plugin.lua"), readfile).unwrap();
                             ctx.stash(Executor::start(ctx, closure.into(), ()))
                         });
+                        plugin_table = Some(lua.execute(&executor).unwrap());
+                        println!("Loaded plugin");
+                    }
+                    GBEvent::RunPlugin => {
+                        let Some(ptab) = &plugin_table else {
+                            println!("No plugin loaded");
+                            continue
+                        };
 
-                        let _ = lua.execute::<()>(&exec);
+                        let executor = lua.enter(|ctx| {
+                            let f = ctx.fetch(&ptab.plugin_fn);
+                            ctx.stash(Executor::start(ctx, f, ()))
+                        });
+                        lua.execute::<()>(&executor).unwrap();
                     }
                 },
                 Err(TryRecvError::Empty) => break 'recv,
