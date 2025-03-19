@@ -8,7 +8,7 @@ use rboy::device::{Device, FRAME_DURATION};
 use rboy::CPU_FREQUENCY;
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -471,7 +471,28 @@ fn construct_cpu(
     Some(c)
 }
 
+fn ask_user_for_permission(permission_name: &str) -> bool {
+    print!("Autorize {} ? (y/n, défaut: n): ", permission_name);
+    io::stdout().flush().unwrap();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).unwrap();
+
+    matches!(input.trim().to_lowercase().as_str(), "y")
+}
+
 fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<Device>>) {
+
+    let perms_str = format!("{:?}", perms);
+
+    let trimmed_str = perms_str.trim_start_matches("PluginPermissions { ").trim_end_matches(" }");
+
+    for line in trimmed_str.split(", ") {
+        let (name, value) = line.split_once(": ").unwrap();
+        ask_user_for_permission(name.trim());
+        // println!("[DEBUG] {}: {}", name.trim(), value.trim());
+    }
+
     if perms.readbyte {
         let rb_clone = cpu.clone();
 
