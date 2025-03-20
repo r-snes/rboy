@@ -21,9 +21,6 @@ const EXITCODE_CPULOADFAILS: i32 = 2;
 
 static mut PERMISSIONS_HSHMP: Option<HashMap<String, bool>> = None;
 
-const READBYTE_IDX: usize = 0;
-const WRITEBYTE_IDX: usize = 1;
-
 #[derive(Default)]
 struct RenderOptions {
     pub linear_interpolation: bool,
