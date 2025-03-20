@@ -19,8 +19,6 @@ use std::collections::HashMap;
 const EXITCODE_SUCCESS: i32 = 0;
 const EXITCODE_CPULOADFAILS: i32 = 2;
 
-static mut PERMISSIONS_HSHMP: Option<HashMap<String, bool>> = None;
-
 #[derive(Default)]
 struct RenderOptions {
     pub linear_interpolation: bool,
@@ -502,78 +500,61 @@ fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<D
             permissions_map.insert(permission_name, false);
         }
     }
-    println!("---");
 
-    // Store HashMap globally
-    unsafe {
-        PERMISSIONS_HSHMP = Some(permissions_map);
+    let all_false = permissions_map.values().all(|&val| !val);
+    if all_false || permissions_map.is_empty() {
+        println!("\nPermissions map empty or all permissions disabled.\n{:?}\n---", permissions_map);
+        return;
     }
 
     // Debug
-    unsafe {
-        if let Some(ref permissions) = PERMISSIONS_HSHMP {
-            println!("Permissions saved : {:?}\n---", permissions);
+    println!("\nPermissions saved: {:?}\n---", permissions_map);
+
+    if let Some(readbyte_permission) = permissions_map.get("readbyte") {
+        if *readbyte_permission {
+            println!("Giving readbyte permission");
+            let rb_clone = cpu.clone();
+            lua.enter(|ctx| {
+                let _ = ctx.set_global(
+                    "readbyte",
+                    Callback::from_fn(&ctx, move |_, _, mut stack| {
+                        let Value::Integer(address) = stack.pop_front() else {
+                            stack.push_front(Value::Nil);
+                            return Ok(CallbackReturn::Return);
+                        };
+
+                        let byte = rb_clone.borrow().cpu.mmu.rb(address as u16);
+                        stack.push_front(Value::Integer(byte as i64));
+                        Ok(piccolo::CallbackReturn::Return)
+                    }),
+                );
+            });
         }
     }
 
-    // -------------------------------
+    if let Some(writebyte_permission) = permissions_map.get("writebyte") {
+        if *writebyte_permission {
+            println!("Giving writebyte permission");
+            let wb_clone = cpu.clone();
+            lua.enter(|ctx| {
+                let _ = ctx.set_global(
+                    "writebyte",
+                    Callback::from_fn(&ctx, move |_, _, mut stack| {
+                        let Value::Integer(address) = stack.pop_front() else {
+                            stack.push_front(Value::Nil);
+                            return Ok(CallbackReturn::Return);
+                        };
 
-    unsafe {
-        if let Some(ref permissions_hshmp) = PERMISSIONS_HSHMP {
+                        let Value::Integer(byte) = stack.pop_front() else {
+                            stack.push_front(Value::Nil);
+                            return Ok(CallbackReturn::Return);
+                        };
 
-            let all_false = permissions_hshmp.values().all(|&v| !v);
-            if all_false {
-                println!("All permissions disabled\n");
-                return;
-            }
-
-            if *permissions_hshmp.get("readbyte").unwrap_or(&false) {
-                println!("Giving readbyte permission");
-
-                let rb_clone = cpu.clone();
-
-                lua.enter(|ctx| {
-                    let _ = ctx.set_global(
-                        "readbyte",
-                        Callback::from_fn(&ctx, move |_, _, mut stack| {
-                            let Value::Integer(address) = stack.pop_front() else {
-                                stack.push_front(Value::Nil);
-                                return Ok(CallbackReturn::Return);
-                            };
-
-                            let byte = rb_clone.borrow().cpu.mmu.rb(address as u16);
-                            stack.push_front(Value::Integer(byte as i64));
-                            Ok(piccolo::CallbackReturn::Return)
-                        }),
-                    );
-                });
-            }
-
-            if *permissions_hshmp.get("writebyte").unwrap_or(&false) {
-                println!("Giving writebyte permission");
-
-                let wb_clone = cpu.clone();
-
-                lua.enter(|ctx| {
-                    let _ = ctx.set_global(
-                        "writebyte",
-                        Callback::from_fn(&ctx, move |_, _, mut stack| {
-                            let Value::Integer(address) = stack.pop_front() else {
-                                stack.push_front(Value::Nil);
-                                return Ok(CallbackReturn::Return);
-                            };
-
-                            let Value::Integer(byte) = stack.pop_front() else {
-                                stack.push_front(Value::Nil);
-                                return Ok(CallbackReturn::Return);
-                            };
-
-                            wb_clone.borrow_mut().cpu.mmu.wb(address as u16, byte as u8);
-                            Ok(piccolo::CallbackReturn::Return)
-                        }),
-                    );
-                });
-            }
+                        wb_clone.borrow_mut().cpu.mmu.wb(address as u16, byte as u8);
+                        Ok(piccolo::CallbackReturn::Return)
+                    }),
+                );
+            });
         }
     }
     print!("\n");
