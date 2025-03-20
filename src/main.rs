@@ -14,10 +14,12 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
+use std::collections::HashMap;
 
 const EXITCODE_SUCCESS: i32 = 0;
 const EXITCODE_CPULOADFAILS: i32 = 2;
 
+static mut PERMISSIONS_HSHMP: Option<HashMap<String, bool>> = None;
 #[derive(Default)]
 struct RenderOptions {
     pub linear_interpolation: bool,
@@ -484,14 +486,34 @@ fn ask_user_for_permission(permission_name: &str) -> bool {
 fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<Device>>) {
 
     let perms_str = format!("{:?}", perms);
-
     let trimmed_str = perms_str.trim_start_matches("PluginPermissions { ").trim_end_matches(" }");
+
+    let mut permissions_map = HashMap::new();
 
     for line in trimmed_str.split(", ") {
         let (name, value) = line.split_once(": ").unwrap();
-        ask_user_for_permission(name.trim());
-        // println!("[DEBUG] {}: {}", name.trim(), value.trim());
+        let permission_name = name.trim().to_string();
+        if value.trim() == "true" {
+            let ret_value = ask_user_for_permission(&permission_name);
+            permissions_map.insert(permission_name, ret_value);
+        } else {
+            permissions_map.insert(permission_name, false);
+        }
     }
+
+    // Store HashMap globally
+    unsafe {
+        PERMISSIONS_HSHMP = Some(permissions_map);
+    }
+
+    // Debug
+    unsafe {
+        if let Some(ref permissions) = PERMISSIONS_HSHMP {
+            println!("Permissions saved : {:?}", permissions);
+        }
+    }
+
+    // -------------------------------
 
     if perms.readbyte {
         let rb_clone = cpu.clone();
