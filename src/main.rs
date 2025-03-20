@@ -486,10 +486,10 @@ fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<D
     let trimmed_str = perms_str.trim_start_matches("PluginPermissions { ").trim_end_matches(" }");
 
     // Debug
-    println!("Default permissions");
+    println!("\nDefault permissions");
     for line in trimmed_str.split(", ") {
         let (name, value) = line.split_once(": ").unwrap();
-        println!("{}: {}", name.trim(), value.trim());
+        println!("> {}: {}", name.trim(), value.trim());
     }
     println!("---");
 
@@ -505,6 +505,7 @@ fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<D
             permissions_map.insert(permission_name, false);
         }
     }
+    println!("---");
 
     // Store HashMap globally
     unsafe {
@@ -514,7 +515,7 @@ fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<D
     // Debug
     unsafe {
         if let Some(ref permissions) = PERMISSIONS_HSHMP {
-            println!("\nPermissions saved : {:?}\n", permissions);
+            println!("Permissions saved : {:?}\n---", permissions);
         }
     }
 
@@ -525,7 +526,7 @@ fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<D
 
             let all_false = permissions_hshmp.values().all(|&v| !v);
             if all_false {
-                println!("All permissions disabled");
+                println!("All permissions disabled\n");
                 return;
             }
 
@@ -578,6 +579,8 @@ fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<D
             }
         }
     }
+    print!("\n");
+
 }
 
 fn pause_cpu(receiver: &Receiver<GBEvent>) {
