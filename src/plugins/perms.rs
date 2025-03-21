@@ -1,11 +1,12 @@
 use piccolo::{FromValue, Value};
+use strict_partial_ord_derive as strict;
 
 /// Trait representing any kind of permission, with varying degrees
 ///
 /// [`Permission`] requires the implementor to define two levels of granted permissions:
 /// - [`all`]: As much permissions as the implementor can represent
 /// - [`none`]: Absolutely zero permission
-pub trait Permission: Eq + Sized {
+pub trait Permission: Eq + PartialOrd + Sized {
     /// Construct a [`Permission`] requesting as much as the implementor can represent
     fn all() -> Self;
 
@@ -23,7 +24,7 @@ pub trait Permission: Eq + Sized {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq, strict::PartialOrd)]
 pub struct ReadWritePermissions {
     pub read: bool,
     pub write: bool,
