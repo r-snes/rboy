@@ -12,10 +12,12 @@ pub trait Permission: Eq + Sized {
     /// Construct a [`Permission`] requesting absolutely zero permission
     fn none() -> Self;
 
+    /// Check if the [`Permission`] object currently represents maximum permissions
     fn is_all(&self) -> bool {
         *self == Self::all()
     }
 
+    /// Check if the [`Permission`] object currently represents empty permissions
     fn is_none(&self) -> bool {
         *self == Self::none()
     }
