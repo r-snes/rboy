@@ -8,12 +8,13 @@ use rboy::device::{Device, FRAME_DURATION};
 use rboy::CPU_FREQUENCY;
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
+use std::collections::HashMap;
 
 const EXITCODE_SUCCESS: i32 = 0;
 const EXITCODE_CPULOADFAILS: i32 = 2;
@@ -464,50 +465,100 @@ fn construct_cpu(
     Some(c)
 }
 
+fn ask_user_for_permission(permission_name: &str) -> bool {
+    print!("Autorize {} ? (y/n, défaut: n): ", permission_name);
+    io::stdout().flush().unwrap();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).unwrap();
+
+    matches!(input.trim().to_lowercase().as_str(), "y")
+}
+
 fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<Device>>) {
-    if perms.readbyte {
-        let rb_clone = cpu.clone();
 
-        lua.enter(|ctx| {
-            let _ = ctx.set_global(
-                "readbyte",
-                Callback::from_fn(&ctx, move |_, _, mut stack| {
-                    let Value::Integer(address) = stack.pop_front() else {
-                        stack.push_front(Value::Nil);
-                        return Ok(CallbackReturn::Return);
-                    };
+    let perms_str = format!("{:?}", perms);
+    let trimmed_str = perms_str.trim_start_matches("PluginPermissions { ").trim_end_matches(" }");
 
-                    let byte = rb_clone.borrow().cpu.mmu.rb(address as u16);
-                    stack.push_front(Value::Integer(byte as i64));
-                    Ok(piccolo::CallbackReturn::Return)
-                }),
-            );
-        });
+    // Debug
+    println!("\nDefault permissions");
+    for line in trimmed_str.split(", ") {
+        let (name, value) = line.split_once(": ").unwrap();
+        println!("> {}: {}", name.trim(), value.trim());
+    }
+    println!("---");
+
+    let mut permissions_map = HashMap::new();
+
+    for line in trimmed_str.split(", ") {
+        let (name, value) = line.split_once(": ").unwrap();
+        let permission_name = name.trim().to_string();
+        if value.trim() == "true" {
+            let ret_value = ask_user_for_permission(&permission_name);
+            permissions_map.insert(permission_name, ret_value);
+        } else {
+            permissions_map.insert(permission_name, false);
+        }
     }
 
-    if perms.writebyte {
-        let wb_clone = cpu.clone();
-
-        lua.enter(|ctx| {
-            let _ = ctx.set_global(
-                "writebyte",
-                Callback::from_fn(&ctx, move |_, _, mut stack| {
-                    let Value::Integer(address) = stack.pop_front() else {
-                        stack.push_front(Value::Nil);
-                        return Ok(CallbackReturn::Return);
-                    };
-
-                    let Value::Integer(byte) = stack.pop_front() else {
-                        stack.push_front(Value::Nil);
-                        return Ok(CallbackReturn::Return);
-                    };
-
-                    wb_clone.borrow_mut().cpu.mmu.wb(address as u16, byte as u8);
-                    Ok(piccolo::CallbackReturn::Return)
-                }),
-            );
-        });
+    let all_false = permissions_map.values().all(|&val| !val);
+    if all_false || permissions_map.is_empty() {
+        println!("\nPermissions map empty or all permissions disabled.\n{:?}\n---", permissions_map);
+        return;
     }
+
+    // Debug
+    println!("\nPermissions saved: {:?}\n---", permissions_map);
+
+    if let Some(readbyte_permission) = permissions_map.get("readbyte") {
+        if *readbyte_permission {
+            println!("Giving readbyte permission");
+            let rb_clone = cpu.clone();
+            lua.enter(|ctx| {
+                let _ = ctx.set_global(
+                    "readbyte",
+                    Callback::from_fn(&ctx, move |_, _, mut stack| {
+                        let Value::Integer(address) = stack.pop_front() else {
+                            stack.push_front(Value::Nil);
+                            return Ok(CallbackReturn::Return);
+                        };
+
+                        let byte = rb_clone.borrow().cpu.mmu.rb(address as u16);
+                        stack.push_front(Value::Integer(byte as i64));
+                        Ok(piccolo::CallbackReturn::Return)
+                    }),
+                );
+            });
+        }
+    }
+
+    if let Some(writebyte_permission) = permissions_map.get("writebyte") {
+        if *writebyte_permission {
+            println!("Giving writebyte permission");
+            let wb_clone = cpu.clone();
+            lua.enter(|ctx| {
+                let _ = ctx.set_global(
+                    "writebyte",
+                    Callback::from_fn(&ctx, move |_, _, mut stack| {
+                        let Value::Integer(address) = stack.pop_front() else {
+                            stack.push_front(Value::Nil);
+                            return Ok(CallbackReturn::Return);
+                        };
+
+                        let Value::Integer(byte) = stack.pop_front() else {
+                            stack.push_front(Value::Nil);
+                            return Ok(CallbackReturn::Return);
+                        };
+
+                        wb_clone.borrow_mut().cpu.mmu.wb(address as u16, byte as u8);
+                        Ok(piccolo::CallbackReturn::Return)
+                    }),
+                );
+            });
+        }
+    }
+    print!("\n");
+
 }
 
 fn pause_cpu(receiver: &Receiver<GBEvent>) {
