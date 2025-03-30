@@ -1113,6 +1113,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
 
 [[package]]
+name = "permissions"
+version = "0.1.0"
+
+[[package]]
 name = "piccolo"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1249,6 +1253,7 @@ dependencies = [
  "clap",
  "cpal",
  "glium",
+ "permissions",
  "piccolo",
  "strict_partial_ord_derive",
  "winit",
