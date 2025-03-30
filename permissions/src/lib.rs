@@ -20,3 +20,13 @@ pub trait Permission: Eq + PartialOrd + Sized {
         *self == Self::none()
     }
 }
+
+impl Permission for bool {
+    fn all() -> Self {
+        true
+    }
+
+    fn none() -> Self {
+        false
+    }
+}
