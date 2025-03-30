@@ -7,6 +7,7 @@ pub use crate::sound::AudioPlayer;
 pub use crate::cpu::CPU_FREQUENCY;
 
 pub mod device;
+pub mod plugins;
 
 mod cpu;
 mod gbmode;

@@ -5,6 +5,7 @@ use cpal::{FromSample, Sample};
 use piccolo::{Callback, Closure, Executor, FromValue, Lua, StashedFunction};
 use piccolo::{CallbackReturn, Value};
 use rboy::device::{Device, FRAME_DURATION};
+use rboy::plugins::perms::ReadWritePermissions;
 use rboy::CPU_FREQUENCY;
 use std::cell::RefCell;
 use std::fs::File;
@@ -14,7 +15,6 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
-use std::collections::HashMap;
 
 const EXITCODE_SUCCESS: i32 = 0;
 const EXITCODE_CPULOADFAILS: i32 = 2;
@@ -27,15 +27,17 @@ struct RenderOptions {
 /// Holds permission requests from a plugin
 ///
 /// The [`Default`] implementation requests no permission
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, PartialOrd)]
 struct PluginPermissions {
-    pub readbyte: bool,
-    pub writebyte: bool,
+    pub ram: ReadWritePermissions,
 }
 
 impl<'gc> FromValue<'gc> for PluginPermissions {
-    fn from_value(_: piccolo::Context<'gc>, value: Value<'gc>) -> Result<Self, piccolo::TypeError> {
-        let mut ret = PluginPermissions::default();
+    fn from_value(
+        ctx: piccolo::Context<'gc>,
+        value: Value<'gc>,
+    ) -> Result<Self, piccolo::TypeError> {
+        let ret = PluginPermissions::default();
 
         if let Value::Nil = value {
             return Ok(ret);
@@ -47,15 +49,20 @@ impl<'gc> FromValue<'gc> for PluginPermissions {
             });
         };
         for (key, val) in tab {
-            let (Value::Integer(_), Value::String(s)) = (key, val) else {
+            let (Value::String(key), val) = (key, val) else {
                 eprintln!("Warn: skipping KV pair in plugin permissions: ([{key}] = {val})");
                 continue;
             };
-            match s.as_bytes() {
-                b"readbyte" => ret.readbyte = true,
-                b"writebyte" => ret.writebyte = true,
-                _ => eprintln!("Warn: skipping unknown perm request: {s}"),
-            }
+            let b"ram" = key.as_bytes() else {
+                eprintln!(
+                    "Found unknown key in permission table: {:?}",
+                    key.as_bytes()
+                );
+                continue;
+            };
+            return Ok(Self {
+                ram: ReadWritePermissions::from_value(ctx, val)?,
+            });
         }
         Ok(ret)
     }
@@ -476,9 +483,12 @@ fn ask_user_for_permission(permission_name: &str) -> bool {
 }
 
 fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<Device>>) {
-
     let perms_str = format!("{:?}", perms);
-    let trimmed_str = perms_str.trim_start_matches("PluginPermissions { ").trim_end_matches(" }");
+    let trimmed_str = perms_str
+        .trim_start_matches("PluginPermissions { ")
+        .trim_end_matches(" }")
+        .trim_start_matches("ram: ReadWritePermissions {");
+    let mut granted = PluginPermissions::default();
 
     // Debug
     println!("\nDefault permissions");
@@ -488,77 +498,69 @@ fn load_permissions(lua: &mut Lua, perms: &PluginPermissions, cpu: &Rc<RefCell<D
     }
     println!("---");
 
-    let mut permissions_map = HashMap::new();
-
     for line in trimmed_str.split(", ") {
         let (name, value) = line.split_once(": ").unwrap();
         let permission_name = name.trim().to_string();
         if value.trim() == "true" {
-            let ret_value = ask_user_for_permission(&permission_name);
-            permissions_map.insert(permission_name, ret_value);
-        } else {
-            permissions_map.insert(permission_name, false);
+            if !ask_user_for_permission(&permission_name) {
+                continue;
+            }
+            match name.trim() {
+                "read" => granted.ram.read = true,
+                "write" => granted.ram.write = true,
+                _ => {}
+            }
         }
     }
-
-    let all_false = permissions_map.values().all(|&val| !val);
-    if all_false || permissions_map.is_empty() {
-        println!("\nPermissions map empty or all permissions disabled.\n{:?}\n---", permissions_map);
+    if !(&granted >= perms) {
+        println!("\nMissing permission to load plugin\n---");
         return;
     }
 
-    // Debug
-    println!("\nPermissions saved: {:?}\n---", permissions_map);
+    if perms.ram.read {
+        println!("Giving readbyte permission");
+        let rb_clone = cpu.clone();
+        lua.enter(|ctx| {
+            let _ = ctx.set_global(
+                "readbyte",
+                Callback::from_fn(&ctx, move |_, _, mut stack| {
+                    let Value::Integer(address) = stack.pop_front() else {
+                        stack.push_front(Value::Nil);
+                        return Ok(CallbackReturn::Return);
+                    };
 
-    if let Some(readbyte_permission) = permissions_map.get("readbyte") {
-        if *readbyte_permission {
-            println!("Giving readbyte permission");
-            let rb_clone = cpu.clone();
-            lua.enter(|ctx| {
-                let _ = ctx.set_global(
-                    "readbyte",
-                    Callback::from_fn(&ctx, move |_, _, mut stack| {
-                        let Value::Integer(address) = stack.pop_front() else {
-                            stack.push_front(Value::Nil);
-                            return Ok(CallbackReturn::Return);
-                        };
-
-                        let byte = rb_clone.borrow().cpu.mmu.rb(address as u16);
-                        stack.push_front(Value::Integer(byte as i64));
-                        Ok(piccolo::CallbackReturn::Return)
-                    }),
-                );
-            });
-        }
+                    let byte = rb_clone.borrow().cpu.mmu.rb(address as u16);
+                    stack.push_front(Value::Integer(byte as i64));
+                    Ok(piccolo::CallbackReturn::Return)
+                }),
+            );
+        });
     }
 
-    if let Some(writebyte_permission) = permissions_map.get("writebyte") {
-        if *writebyte_permission {
-            println!("Giving writebyte permission");
-            let wb_clone = cpu.clone();
-            lua.enter(|ctx| {
-                let _ = ctx.set_global(
-                    "writebyte",
-                    Callback::from_fn(&ctx, move |_, _, mut stack| {
-                        let Value::Integer(address) = stack.pop_front() else {
-                            stack.push_front(Value::Nil);
-                            return Ok(CallbackReturn::Return);
-                        };
+    if perms.ram.write {
+        println!("Giving writebyte permission");
+        let wb_clone = cpu.clone();
+        lua.enter(|ctx| {
+            let _ = ctx.set_global(
+                "writebyte",
+                Callback::from_fn(&ctx, move |_, _, mut stack| {
+                    let Value::Integer(address) = stack.pop_front() else {
+                        stack.push_front(Value::Nil);
+                        return Ok(CallbackReturn::Return);
+                    };
 
-                        let Value::Integer(byte) = stack.pop_front() else {
-                            stack.push_front(Value::Nil);
-                            return Ok(CallbackReturn::Return);
-                        };
+                    let Value::Integer(byte) = stack.pop_front() else {
+                        stack.push_front(Value::Nil);
+                        return Ok(CallbackReturn::Return);
+                    };
 
-                        wb_clone.borrow_mut().cpu.mmu.wb(address as u16, byte as u8);
-                        Ok(piccolo::CallbackReturn::Return)
-                    }),
-                );
-            });
-        }
+                    wb_clone.borrow_mut().cpu.mmu.wb(address as u16, byte as u8);
+                    Ok(piccolo::CallbackReturn::Return)
+                }),
+            );
+        });
     }
     print!("\n");
-
 }
 
 fn pause_cpu(receiver: &Receiver<GBEvent>) {
