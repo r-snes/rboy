@@ -6,10 +6,15 @@ version = 4
 name = "permission_derive_macro"
 version = "0.1.0"
 dependencies = [
+ "permissions",
  "proc-macro2",
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "permissions"
+version = "0.1.0"
 
 [[package]]
 name = "proc-macro2"
