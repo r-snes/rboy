@@ -33,6 +33,7 @@
 
             rustc
             cargo
+            cargo-expand
             rustfmt
           ];
           LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
