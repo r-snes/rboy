@@ -1,7 +1,7 @@
 {
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
-    nixpkgs.url = "github:nixos/nixpkgs?ref=release-24.11";
+    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
   };
 
   outputs = {
@@ -33,6 +33,7 @@
 
             rustc
             cargo
+            cargo-expand
             rustfmt
           ];
           LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
