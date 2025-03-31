@@ -1,24 +1,12 @@
+use permission_derive_macro::Permission;
 use permissions::Permission;
 use piccolo::{FromValue, Value};
 use strict_partial_ord_derive as strict;
 
-#[derive(Debug, Default, PartialEq, Eq, strict::PartialOrd)]
+#[derive(Debug, Default, PartialEq, Eq, strict::PartialOrd, Permission)]
 pub struct ReadWritePermissions {
     pub read: bool,
     pub write: bool,
-}
-
-impl Permission for ReadWritePermissions {
-    fn all() -> Self {
-        Self {
-            read: true,
-            write: true,
-        }
-    }
-
-    fn none() -> Self {
-        Self::default()
-    }
 }
 
 impl<'gc> FromValue<'gc> for ReadWritePermissions {
